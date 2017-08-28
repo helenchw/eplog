@@ -98,6 +98,8 @@ typedef boost::shared_mutex RWMutex;
 #define INVALID_CHUNK   (chunk_id_t) -1
 #define INVALID_SEG     (sid_t) -1
 #define INVALID_FILE    (file_id_t) -1
+#define INVALID_OFFSET  (LL) -1
+#define INVALID_ADDR    (uint64_t) -1
 
 /** Data update mode **/
 // 1. in-place data update

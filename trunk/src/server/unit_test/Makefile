@@ -11,17 +11,17 @@
 ###############################################################################
 
 CROSS_COMPILE =
-OPTIMIZE := -O2 -DDEBUG=0 -D_FILE_OFFSET_BITS=64 -DBLOCK_ITF #-DDRY_RUN_PERF
+OPTIMIZE := -O2 -DDEBUG=0 -D_FILE_OFFSET_BITS=64 -DBLOCK_ITF -DBATCH_RECOVERY #-DDRY_RUN_PERF
 WARNINGS := -Wall 
 EXTRA_CFLAGS := -g --std=c++0x -D_FILE_OFFSET_BITS=64 
-LIBS := -lboost_thread -lboost_system -lpthread -lcrypto
+LIBS := -lboost_thread -lboost_system -lpthread -ldl -lcrypto
 
-INC_DIR   = ../../ ../../../ ../../../lib/jerasure/include ../../../lib/gf-complete/include
+INC_DIR   = ../../ ../../../ ../../../lib/jerasure/include ../../../lib/gf-complete/include ../../../lib/libcuckoo-0.2
 SRC_DIR   =	../ ../../common  ../coding ../../common/struct ../../../lib/threadpool ../../../lib/jerasure/src ../../../lib/gf-complete/src
 OBJ_DIR   = ./obj
 BIN_DIR   = ../../../bin
 EXTRA_SRC = 
-EXCLUDE_FILES = 
+EXCLUDE_FILES = ../kvmod.cc ../../common/cuckoohash.cc
 EXCLUDE_OBJS = obj/example.o
 SUFFIX       = c cc
 TARGET		 := example
@@ -72,8 +72,8 @@ all_objs = $(foreach i,$(SUFFIX),$(obj-$i))
 all_srcs = $(foreach i,$(SUFFIX),$(src-$i))
 share_objs = $(filter-out $(EXCLUDE_OBJS), $(all_objs))
 
-CFLAGS       = $(EXTRA_CFLAGS) $(WARNINGS) $(OPTIMIZE) $(ADHOC) $(DEFS)
-GCCFLAGS	 = $(OPTIMIZE) $(ADHOC) $(DEFS)
+CFLAGS       = $(EXTRA_CFLAGS) $(WARNINGS) $(OPTIMIZE)
+GCCFLAGS	 = $(OPTIMIZE)
 TARGET_TYPE := $(strip $(TARGET_TYPE))
 
 ifeq ($(filter $(TARGET_TYPE),so ar app),)

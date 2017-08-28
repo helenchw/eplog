@@ -5,6 +5,8 @@
 #include "server/storagemod.hh"
 #include "server/segmetamod.hh"
 #include "server/gcmod.hh"
+#include "server/kvmod.hh"
+
 typedef chrono::high_resolution_clock Clock;
 typedef chrono::milliseconds milliseconds;
 int segmentSize, pageSize, pagePerBlock, blockPerSeg, blockSize;
@@ -29,9 +31,9 @@ void printbuf(char* buf) {
     \param buf First buffer
     \param buf1 Second buffer
  */
-void printdiff(char* buf, char* buf1) {
+void printdiff(char* buf, char* buf1, int len) {
     int start = -1, end = -1;
-    for (int i = 0; i < segmentSize; i++) {
+    for (int i = 0; i < len; i++) {
         if (buf[i] != buf1[i]) {
             if (start == -1) {
                 printf("start diff [%x] vs [%x]\n", buf[i], buf1[i]);
@@ -54,14 +56,14 @@ int main () {
     srand( (unsigned int) time(NULL));
 
     // List the disks available in the system
-    DiskInfo disk1 (0, "disk1",  1048576ULL * 10);
-    DiskInfo disk2 (1, "disk2",  1048576ULL * 10);
-    DiskInfo disk3 (2, "disk3",  1048576ULL * 10);
-    DiskInfo disk4 (3, "disk4",  1048576ULL * 10);
-    DiskInfo disk5 (4, "disk5",  1048576ULL * 10);
-    DiskInfo disk6 (5, "disk6",  1048576ULL * 10);
-    DiskInfo disk7 (6, "disk7",  1048576ULL * 10, true);
-    DiskInfo disk8 (7, "disk8",  1048576ULL * 10, true);
+    DiskInfo disk1 (0, "disk1",  1048576ULL * 20);
+    DiskInfo disk2 (1, "disk2",  1048576ULL * 20);
+    DiskInfo disk3 (2, "disk3",  1048576ULL * 20);
+    DiskInfo disk4 (3, "disk4",  1048576ULL * 20);
+    DiskInfo disk5 (4, "disk5",  1048576ULL * 20);
+    DiskInfo disk6 (5, "disk6",  1048576ULL * 20);
+    DiskInfo disk7 (6, "disk7",  1048576ULL * 20, true);
+    DiskInfo disk8 (7, "disk8",  1048576ULL * 20, true);
     vector<DiskInfo> v_diskInfo {disk1,disk2,disk3,disk4,disk5,disk6,disk7,disk8};
     DiskMod* diskMod = new DiskMod (v_diskInfo);
 
@@ -105,6 +107,7 @@ int main () {
         if (ret < 0) {
             printf("Cannot read from /dev/urandom!\n");
         }
+        close(fd);
 
         // write
 #ifndef BLOCK_ITF
@@ -126,13 +129,13 @@ int main () {
         same = (memcmp (buf, buf1, segmentSize) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize);
             printf("----------------------------------------\n");
             assert (same);
         }
         printf ("%s\n", ">>> Test 1 (write a new file) passed.");
 
-    // TEST2: modify
+        // TEST2: modify
         printf("\n%s\n", ">>> Test 2: Overwrite the file");
         char *obuf = (char*) malloc (sizeof(char)*segmentSize);
         memcpy(obuf, buf, segmentSize);
@@ -157,7 +160,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -206,14 +209,12 @@ int main () {
         int byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
         printf("Whole segment, byteRead = %d\n", byteRead);
-        printdiff(buf, buf1);
-        printdiff(buf + segmentSize, buf1 + segmentSize);
-            same = (memcmp(buf, buf1, segmentSize * 2) == 0);
-            if ( ! same ) {
-                printf("----------------------------------------\n");
-                printdiff(buf, buf1);
-                printf("----------------------------------------\n");
-                assert (same);
+        same = (memcmp(buf, buf1, segmentSize * 2) == 0);
+        if ( ! same ) {
+            printf("----------------------------------------\n");
+            printdiff(buf, buf1, segmentSize * 2);
+            printf("----------------------------------------\n");
+            assert (same);
         }
 
         // modify
@@ -236,7 +237,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -264,7 +265,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -294,14 +295,13 @@ int main () {
 #ifndef BLOCK_ITF
         byteRead = storageMod->read("testfile1", buf1, 0, segmentSize * 2);
 #else
-        byteRead = storageMod->read(buf1, 0, segmentSize * 2);
+        byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
         printf("Whole segment, byteRead = %d\n", byteRead);
-        printdiff(buf, buf1);
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -325,11 +325,10 @@ int main () {
         byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
         printf("Whole segment, byteRead = %d\n", byteRead);
-        printdiff(buf, buf1);
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -348,7 +347,7 @@ int main () {
             same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg-1)) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf, buf1);
+                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg-1));
                 printf("----------------------------------------\n");
                 assert (same);
             }
@@ -362,7 +361,7 @@ int main () {
             same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg -2)) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf, buf1);
+                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg -2));
                 printf("----------------------------------------\n");
                 assert (same);
             }
@@ -401,7 +400,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -424,7 +423,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -448,7 +447,7 @@ int main () {
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -476,11 +475,10 @@ int main () {
         byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
         printf("[REPEAT] Whole segment, byteRead = %d\n", byteRead);
-        printdiff(buf, buf1);
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize * 2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -500,11 +498,10 @@ int main () {
         byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
         printf("[REPEAT] Whole segment, byteRead = %d\n", byteRead);
-        printdiff(buf, buf1);
         same = (memcmp(buf, buf1, segmentSize * 2) == 0);
         if ( ! same ) {
             printf("----------------------------------------\n");
-            printdiff(buf, buf1);
+            printdiff(buf, buf1, segmentSize *2);
             printf("----------------------------------------\n");
             assert (same);
         }
@@ -520,7 +517,7 @@ int main () {
             same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg-1)) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf, buf1);
+                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg-1));
                 printf("----------------------------------------\n");
                 assert (same);
             }
@@ -534,7 +531,7 @@ int main () {
             same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg -2)) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf, buf1);
+                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg -2));
                 printf("----------------------------------------\n");
                 assert (same);
             }
@@ -542,8 +539,86 @@ int main () {
         printf("%s\n", "[REPEAT] Test 3a-f passed.\n");
 
     }
-    
+
+#ifdef BLOCK_ITF
+    {
+        syncMod = new SyncMod();
+        segMetaMod = new SegmentMetaDataMod();
+        raidMod = new RaidMod (diskMod, codeSettingList, &gcQueue, segMetaMod, syncMod);
+        fileMetaMod = new FileMetaDataMod(segMetaMod);
+
+        // different log buffer but share the same metadata pool
+        logMod = new LogMod(raidMod, segMetaMod, fileMetaMod, syncMod, codeLogSetting);
+        storageMod = new StorageMod(segMetaMod, fileMetaMod, logMod, raidMod);
+
+        printf(">>>> Test 4: KV-store interface\n");
+        
+        KVMod *kvMod = new KVMod(storageMod);
+
+        char keys[1024][24];
+        char values[1024][4096];
+
+        printf(">>>> Test 4a: Set new key-value pairs\n");
+        int fd = open("/dev/urandom", O_RDONLY);
+        int ret = 0;
+        for (int i = 0; i < 1024; i++) {
+            ret = read(fd, keys[i], 24);
+            ret = read(fd, values[i], 4096);
+            if (ret < 0) {
+                printf("Cannot read from /dev/urandom\n");
+            }
+            kvMod->set(keys[i], 24, values[i], 4096, (i+1 == 1024));
+        }
+        char *readBuf;
+        uint32_t valueSize;
+        for (int i = 0; i < 1024; i++) {
+            kvMod->get(keys[i], 24, &readBuf, valueSize);
+            same = (valueSize == 4096 && memcmp(readBuf, values[i], 4096) == 0);
+            if (!same) {
+                printf("----------------------------------------\n");
+                printf("valueSize %u\n", valueSize);
+                printdiff(values[i], readBuf, 4096);
+                printf("----------------------------------------\n");
+                assert (same);
+            }
+            free(readBuf);
+        }
+        printf(">>>> Test 4a (set new key-value pairs) passed\n");
+        
+        printf(">>>> Test 4b: Update some key-value pairs\n");
+        for (int i = 0; i < 1024; i++) {
+            if (i % 100 < 30)
+                continue;
+            ret = read(fd, values[i], 4096);
+            if (ret < 0) {
+                printf("Cannot read from /dev/urandom\n");
+            }
+            kvMod->update(keys[i], 24, values[i], 4096, (i+1 == 1024));
+        }
+        for (int i = 0; i < 1024; i++) {
+            kvMod->get(keys[i], 24, &readBuf, valueSize);
+            same = (valueSize == 4096 && memcmp(readBuf, values[i], 4096) == 0);
+            if (!same) {
+                printf("----------------------------------------\n");
+                printf("valueSize %u\n", valueSize);
+                printdiff(values[i], readBuf, 4096);
+                printf("----------------------------------------\n");
+                assert (same);
+            }
+            free(readBuf);
+        }
+        printf(">>>> Test 4b (update some key-value pairs) passed\n");
+
+        printf(">>>> Test 4 (KV-store interface) passed.\n");
+
+        close(fd);
+
+        delete storageMod;
+        delete kvMod;
+    }
+#else //ifdef BLOCK_ITF
     delete storageMod;
+#endif //ifdef BLOCK_ITF
     printf ("%s\n", "========== Finish example tests ==========");
 
     return 0;

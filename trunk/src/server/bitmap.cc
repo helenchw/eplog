@@ -48,25 +48,8 @@ const ULL BitMap::m_clearmask[] = {
     0xEFFFFFFFFFFFFFFFULL,0xDFFFFFFFFFFFFFFFULL,0xBFFFFFFFFFFFFFFFULL,0x7FFFFFFFFFFFFFFFULL
 };
 
-BitMap::BitMap() {
+BitMap::BitMap(): BitMap(ConfigMod::getInstance().getSegmentSize()/ConfigMod::getInstance().getPageSize()) {
     debug("%s\n", "Constructing an default bitmap, using SEGMENT_SIZE / PAGE_SIZE");
-
-	int size = ConfigMod::getInstance().getSegmentSize()/ConfigMod::getInstance().getPageSize();
-    assert (!(m_unit & (m_unit-1))); // unit must be power of 2
-
-    int num = size / m_unit;
-    if (size % m_unit) ++num;
-
-    debug("Malloc %d unit\n", num);
-    m_bv = (ULL*) malloc (sizeof(ULL) * num);
-
-    assert(m_bv);
-
-    m_num = num;
-    m_size = size;
-    memset (m_bv, 0, sizeof(ULL) * num);
-
-    m_bitmapMutex = new mutex();
 }
 
 BitMap::BitMap(int size) {
@@ -88,6 +71,7 @@ BitMap::BitMap(int size) {
 
 BitMap::~BitMap() {
     free (m_bv);
+    delete m_bitmapMutex;
 }
 
 bool BitMap::getBit(int addr) {

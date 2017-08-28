@@ -70,6 +70,17 @@ public:
     void writeBlockToLba_mt (disk_id_t diskId, const char* buf, lba_t lba, int len, std::atomic_int& cnt, LL ts = 0);
 
     /**
+     * Write a sequence of blocks to a disk from a designated address (for multi-thread)
+     * \param diskId the disk id of the disk
+     * \param buf buffer containing the data
+     * \param lba starting address to write/overwrite
+     * \param len number of blocks to write/overwrite
+     * \param cnt thread counter to update (decrement)
+     * \param ts timestamp
+     */
+    void writeSeqBlocks_mt (disk_id_t diskId, const char* buf, int len, lba_t &lba, std::atomic_int& cnt, LL ts = 0);
+
+    /**
      * Write multiple new blocks to a disk 
      * \param diskId the disk id of the disk
      * \param buf buffer containing the data to write
@@ -138,6 +149,18 @@ public:
     int readBlock (disk_id_t diskId, lba_t lba, void* buf, off_len_t blockOffLen, LL ts = 0);
 
     /**
+     * readBlocks_mt
+     * Read multiple sequences of blocks from a disk (for multi-thread)
+     * \param diskId the disk id of the disk to read
+     * \param LBASet the set of address of blocks to read
+     * \param buf the buffer receiving the data read
+     * \param cnt the thread counter to update (decrement)
+     * \param ts timestamp
+     */
+    void readBlocks_mt (disk_id_t diskId, set<lba_t> &LBASet, char* buf, 
+            std::atomic_int& cnt, LL ts = 0);
+
+    /**
      * Read a sequence of blocks from a disk (for multi-thread)
      * \param diskId disk id of the disk
      * \param startLBA starting address of blocks
@@ -148,6 +171,8 @@ public:
      */
     void readBlocks_mt (disk_id_t diskId, lba_t startLBA, lba_t endLBA, char* buf, 
             std::atomic_int& cnt, LL ts = 0);
+    void readBlocks_mt (disk_id_t diskId, lba_t startLBA, lba_t endLBA, char* buf, 
+            int& ready, std::mutex& lock, LL ts = 0);
 
     /**
      * Read a sequence of blocks from a disk 

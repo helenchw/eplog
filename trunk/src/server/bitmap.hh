@@ -8,9 +8,6 @@
 
 using namespace std;
 
-/**
-  * Bitmap
-  */
 class BitMap {
 public:
     /**

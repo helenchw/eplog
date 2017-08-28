@@ -293,7 +293,7 @@ vector<ChunkSymbols> CauchyCoding::getReqSymbols(vector<bool> chunkStatus,
     ChunkSymbols chunkSymbol;
     bool raid0Decode = true;
     int startChunk = offLen.first / chunkSize;
-    int endChunk = (offLen.first + offLen.second) / chunkSize;
+    int endChunk = (offLen.first + offLen.second - 1) / chunkSize;
 
     const int fail = (int) count(chunkStatus.begin(), chunkStatus.end(), false);
    
@@ -312,7 +312,7 @@ vector<ChunkSymbols> CauchyCoding::getReqSymbols(vector<bool> chunkStatus,
     }
     
     // direct read data (normal read)
-    if (raid0Decode) {
+    if (raid0Decode && startChunk < k && endChunk < k) {
         debug("%s from %d to %d\n", "Using raid0 decode", offLen.first, offLen.first+offLen.second);
         for (i = 0; i < n-k; i++) {
             chunkStatus.pop_back();     // ignore m parities

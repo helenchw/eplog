@@ -88,7 +88,9 @@ SegmentMetaData* const SegmentMetaDataMod::createEntry(bool isUpdateLog, sid_t s
     SegmentMetaData* smd = new SegmentMetaData(segSize/pageSize);
     sid_t segmentId = -1;
     if (isUpdateLog) {
-        segmentId = --m_logSegmentIdCounter;
+        do {
+            segmentId = --m_logSegmentIdCounter;
+        } while (m_metaMap.count(segmentId));
     } else if (sid != INVALID_SEG && !m_metaMap.count(sid)) {
         m_segmentIdCounter = (sid > m_segmentIdCounter)? sid:m_segmentIdCounter;
         segmentId = sid;
@@ -152,3 +154,10 @@ bool SegmentMetaDataMod::removeEntry(sid_t segmentId) {
     return ret;
 }
 
+sid_t SegmentMetaDataMod::probeNextSegmentId() {
+    return m_segmentIdCounter+1;
+}
+
+void SegmentMetaDataMod::resetLogSegmentId() {
+    m_logSegmentIdCounter = MAX_SEGMENTS;
+}

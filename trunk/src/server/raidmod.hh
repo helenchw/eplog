@@ -187,6 +187,15 @@ public:
      */
     bool syncAllSegments(LL ts = 0);
 
+	/**
+	 * Recover failed disks to target disks, after degraded parity commit
+	 * \param failed list of disks failed
+	 * \param target list of disks to store recovered data
+     * \param ts timestamp
+     * \return amount of data recovered
+	 */
+	uint64_t recoverData(vector<disk_id_t> failed, vector<disk_id_t> target, LL ts = 0);
+
 private:
 
     /**
@@ -228,6 +237,28 @@ private:
     int getChunkLength (vector<off_len_t> offLen) const;
 
     /**
+     * batchRecovery
+     * Recover failed chunks in a batch of data segments 
+     * \param readbuf buffer for holding the chunks read
+     * \param writebuf buffer for holding the chunks to write
+     * \param seguf buffer for decoding
+     * \param readbufMap mapping of address to chunks in readbuf
+     * \param dataSegments metadata of data segments to recover
+     * \param chunksRead metadata of the chunks read from each segment
+     * \param failedChunks metadata of failed chunks in each segment
+     * \param stripeChunkEnd ending position of chunks for each segment
+     * \param batchSize max. number of segments in each batch
+     * \param target the disk to store recovered data
+     * \return number of bytes recovered
+     */
+    uint64_t batchRecovery(char *readbuf, char *writebuf, char* segbuf,
+            map<disk_id_t, set<lba_t> > &readbufMap,
+            vector<SegmentMetaData*> &dataSegments, vector<Chunk> &chunksRead,
+            vector<chunk_id_t> &failedChunks, vector<pair<uint32_t,uint32_t> > stripeChunkEnd,
+            uint32_t batchSize, vector<disk_id_t> target);
+
+    /**
+     * syncParityBlocks
      * Synchronize the parity block according to the scheme specified
      * \param dataSegment the segment metadata data structure of the data segment
      * \param chunks list of new chunks (including both data and parity)

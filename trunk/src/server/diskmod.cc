@@ -2,10 +2,12 @@
 #include <algorithm>
 #include <cstdlib>
 #include <set>
-#include "common/enum.hh"
+#include <errno.h>
 #include "common/debug.hh"
+#include "common/enum.hh"
 #include "server/diskmod.hh"
 #include "common/configmod.hh"
+#include "server/cachemod.hh"
 
 
 // disk array should not change after initialization
@@ -164,7 +166,7 @@ int DiskMod::writeBlock(disk_id_t diskId, lba_t lba, int len, void* buf, LL ts) 
 #ifdef USE_MMAP
     memcpy(diskInfo.data + diskOffset, buf, blockSize);
 #else /* USE_MMAP */
-    if (pwrite(diskInfo.fd, buf, len, diskOffset) < 0) {
+    if (!m_diskInfo[diskId].isLogDisk && pwrite(diskInfo.fd, buf, len, diskOffset) < 0) {
         debug_error ("pwrite error: %s\n", strerror (errno));
         exit(-1);
     }
@@ -232,6 +234,12 @@ void DiskMod::writeBlocks_mt(disk_id_t diskId, const char* buf, int len,
     cnt--;
 }
 
+void DiskMod::writeSeqBlocks_mt(disk_id_t diskId, const char* buf, int len, 
+        lba_t& lba, std::atomic_int& cnt, LL ts) {
+    lba = writeBlocks(diskId, buf, len, ts);
+    cnt--;
+}
+
 int DiskMod::writeBlocks(disk_id_t diskId, const char* buf, int len, LL ts) {
     lock_guard<mutex> lk(*m_diskMutex[diskId]);
     assert(m_diskMutex.count(diskId));
@@ -246,9 +254,9 @@ int DiskMod::writeBlocks(disk_id_t diskId, const char* buf, int len, LL ts) {
 	lba = m_usedLBA[diskId]->getFirstZerosAndFlip(front, len);
 
 	// try to fill up holes on data disks
-	if (lba < 0 && !m_diskInfo[diskId].isLogDisk) {
-		lba = m_usedLBA[diskId]->getFirstZerosAndFlip(0, len);
-	}
+	//if (lba < 0 && !m_diskInfo[diskId].isLogDisk) {
+	//	lba = m_usedLBA[diskId]->getFirstZerosAndFlip(0, len);
+	//}
 
 	// no free LBA available
     if (lba < 0) {
@@ -268,7 +276,7 @@ int DiskMod::writeBlocks(disk_id_t diskId, const char* buf, int len, LL ts) {
 #ifdef USE_MMAP
     memcpy(m_diskInfo[diskId].data + diskOffset, buf, blockSize * len);
 #else /* USE_MMAP */
-    if (pwrite(m_diskInfo[diskId].fd, buf, blockSize * len, diskOffset) < 0) {
+    if (!m_diskInfo[diskId].isLogDisk && pwrite(m_diskInfo[diskId].fd, buf, blockSize * len, diskOffset) < 0) {
         debug_error ("pwrite error: %s\n", strerror (errno));
         exit(-1);
     }
@@ -318,9 +326,11 @@ int DiskMod::readBlock(disk_id_t diskId, lba_t lba, void* buf, off_len_t blockOf
 #ifdef USE_MMAP
     memcpy(buf, m_diskInfo[diskId].data + diskOffset, blockOffLen.second);
 #else /* USE_MMAP */
-    if (pread(m_diskInfo[diskId].fd, buf, blockOffLen.second, diskOffset) < 0 ) {
-        debug_error ("pread error: %s, of = %llu, len = %d\n", strerror (errno), diskOffset, blockOffLen.second);
-        exit(-1);
+    if (!CacheMod::getInstance().isInit() || !CacheMod::getInstance().getReadBlock(diskId, lba, (char*)buf)) {
+        if (pread(m_diskInfo[diskId].fd, buf, blockOffLen.second, diskOffset) < 0 ) {
+            debug_error ("pread error: %s, of = %llu, len = %d\n", strerror (errno), diskOffset, blockOffLen.second);
+            exit(-1);
+        }
     }
 #ifdef READ_AHEAD
     posix_fadvise(m_diskInfo[diskId].fd, diskOffset + blockOffLen.second, 
@@ -330,6 +340,7 @@ int DiskMod::readBlock(disk_id_t diskId, lba_t lba, void* buf, off_len_t blockOf
 #endif /* ACTUAL_DISK_IO */
 
 #ifdef DISKLBA_OUT
+    const ULL diskOffset = (ULL)lba * blockSize + blockOffLen.first;
     fprintf(fp, "%lld %d %lld %d %d\n", ts*1000, diskId, diskOffset / DISK_BLOCK_SIZE, blockOffLen.second / DISK_BLOCK_SIZE, 1);
 #endif /* DISKLBA_OUT */
 
@@ -340,6 +351,60 @@ void DiskMod::readBlocks_mt(disk_id_t diskId, lba_t startLBA, lba_t endLBA, char
         std::atomic_int& cnt, LL ts) {
     readBlocks(diskId, startLBA, endLBA, buf, ts);
     cnt--;
+}
+
+void DiskMod::readBlocks_mt(disk_id_t diskId, set<lba_t> &LBASet, char* buf, std::atomic_int& cnt, LL ts) {
+    ULL blockSize = ConfigMod::getInstance().getBlockSize();
+    lba_t startLBA = INVALID_LBA, endLBA = INVALID_LBA;
+    set<lba_t>::iterator lbaIt;
+    uint32_t lbaRead = 0;
+    for (lbaIt = LBASet.begin(); lbaIt != LBASet.end(); lbaIt++) {
+        // check if the blocks can be read from cache
+        for ( ; CacheMod::getInstance().isInit() && lbaIt != LBASet.end(); lbaIt++) {
+            // see if get from cache
+            lba_t offset = (startLBA != INVALID_LBA && endLBA != INVALID_LBA)? endLBA - startLBA + 1 : 0;
+            if (!CacheMod::getInstance().getReadBlock(diskId, *lbaIt, buf + (lbaRead + offset) * blockSize)) {
+                break;
+            }
+            if (startLBA != INVALID_LBA && endLBA != INVALID_LBA) {
+                readBlocks(diskId, startLBA, endLBA, buf + lbaRead * blockSize, ts);
+                lbaRead += endLBA - startLBA + 1;
+                startLBA = INVALID_LBA;
+                endLBA = INVALID_LBA;
+            }
+            lbaRead += 1;
+        }
+        if (lbaIt == LBASet.end())
+            break;
+        if (*lbaIt != endLBA + 1) {
+            if (startLBA != INVALID_LBA && endLBA != INVALID_LBA) {
+                readBlocks(diskId, startLBA, endLBA, buf + lbaRead * blockSize, ts);
+                lbaRead += endLBA - startLBA + 1;
+            } else {
+                assert(lbaRead > 0 || lbaIt == LBASet.begin());
+            }
+            // reset the range of address to read
+            startLBA = *lbaIt;
+            endLBA = *lbaIt;
+        } else {
+            // expand the range of address to read
+            endLBA = *lbaIt;
+        }
+    }
+    if (startLBA != INVALID_LBA && endLBA != INVALID_LBA && lbaRead < LBASet.size()) {
+        readBlocks(diskId, startLBA, endLBA, buf + lbaRead * blockSize, ts);
+        lbaRead += endLBA - startLBA + 1;
+    }
+    assert(lbaRead == LBASet.size());
+    cnt--;
+}
+
+void DiskMod::readBlocks_mt(disk_id_t diskId, lba_t startLBA, lba_t endLBA, char* buf,
+        int& ready, std::mutex& lock, LL ts) {
+    readBlocks(diskId, startLBA, endLBA, buf, ts);
+    lock.lock();
+    ready = true;
+    lock.unlock();
 }
 
 int DiskMod::readBlocks(disk_id_t diskId, lba_t startLBA, lba_t endLBA, char* buf, LL ts) {

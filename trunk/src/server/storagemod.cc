@@ -40,7 +40,7 @@ int StorageMod::read(const char* path, char* buf, LL offset, int length, LL ts) 
         const LL itOffset = it->fileOffset;
         const int itLength = it->locLength;
         //debug ("remainLen = %d, itLength = %d, itOffset = %d, curOffset = %d, offset = %d, length = %d\n", remainLen, itLength, itOffset, curOffset, offset, length);
-        debug("%d B remains, read segment %d from %lld to %lld at buf %lld\n", remainLen, segmentId, itOffset, itOffset+itLength, curOffset-offset);
+        debug ("%d B remains, read segment %d from %lld to %lld at buf %lld\n", remainLen, segmentId, itOffset, itOffset+itLength, curOffset-offset);
         int len = (int)std::min((ULL)remainLen, (ULL)itLength - (ULL)(curOffset - itOffset));
         bool readDisk = false;
         // 1. update buffer , 2. new write buffer , 3. on disk
@@ -266,7 +266,7 @@ int StorageMod::write(char* buf, LL offset, int length, LL ts) {
         SegmentMetaData* smd = nullptr;
 
         chunk_id_t startChunk = (volOff % segmentSize) / chunkSize;
-        chunk_id_t endChunk = (volOff % segmentSize + curLen + chunkSize -1) / chunkSize;
+        chunk_id_t endChunk = (volOff % segmentSize + curLen -1) / chunkSize;
 
         bool isUpdate = m_segMetaMod->m_metaMap.count(i);
         if (isUpdate) { 
@@ -290,17 +290,19 @@ int StorageMod::write(char* buf, LL offset, int length, LL ts) {
             }
             assert(endChunk != INVALID_CHUNK);
             int updateLen = endChunk * chunkSize - volOff % segmentSize;
-            m_logMod->writeLog(buf, 0, nullptr, make_pair(volOff, updateLen), (i+1 == endSegmentId), ts, true);
+            m_logMod->writeLog(buf + (length - remainLen), 0, nullptr, make_pair(volOff, updateLen), (i+1 == endSegmentId), ts, true);
+            remainLen -= updateLen;
             curLen -= updateLen;
             volOff += updateLen;
             isUpdate = false;
         }
 
-        // leave the job of determining which buffer to use to logMod
-        //printf("writeLog %llu len %d, sid start %d end %d cur %d, is %d\n", offset, length, startSegmentId, endSegmentId, i, isUpdate);
-        m_logMod->writeLog(buf, 0, nullptr, make_pair(volOff, curLen), (i+1 == endSegmentId), ts, isUpdate);
+        if (curLen > 0) {
+            // leave the job of determining which buffer to use to logMod
+            //printf("writeLog %llu len %d, sid start %d end %d cur %d, is %d\n", offset, length, startSegmentId, endSegmentId, i, isUpdate);
+            m_logMod->writeLog(buf + (length - remainLen), 0, nullptr, make_pair(volOff, curLen), (i+1 == endSegmentId), ts, isUpdate);
+        }
 
-        buf += curLen;
         remainLen -= curLen;
         volOff = ((LL) i + 1) * segmentSize;
         curLen = min(remainLen, (int) (segmentSize - volOff % segmentSize));

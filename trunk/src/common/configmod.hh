@@ -40,12 +40,16 @@ public:
     int getLogTh() const;
     int getDataTh() const;
     int getNumThread() const;
+    int getRecoveryBatchSize() const;
+    bool isCacheAllKeys() const;
+    size_t getKeyCacheSize() const;
 
 private:
     ConfigMod() {}
     ConfigMod(ConfigMod const&);            // Don't Implement
     void operator=(ConfigMod const&);       // Don't implement
     
+    bool readBool (const char* key);
     int readInt (const char* key);
     double readFloat(const char* key);
     ULL readULL (const char* key);
@@ -72,8 +76,14 @@ private:
 
     int m_logTh;                            /**< HDD log threshold for triggering sync */
     int m_dataTh;                           /**< Data log threshold for triggering sync */
+    int m_isDataInplace;                    /**< whether lastest data is rewritten in-place sync */
 
     int m_numThread;                        /**< Number of threads supported by CPU */
+
+    int m_recoveryBatchSize;                /**< no. of segments batched for recovery */
+
+    bool m_cacheAllKeys;
+    size_t m_keyCacheSize;
 };
 
 #endif /* CONFIGMOD_HH_ */

@@ -26,9 +26,20 @@ void ConfigMod::setConfigPath (const char* path) {
 
     m_logTh = readInt("sync.logThreshold");
     m_dataTh = readInt("sync.dataThreshold");
+    m_isDataInplace = readBool("sync.dataInplace");
 
     m_numThread = std::thread::hardware_concurrency();
     if (m_numThread <= 0) { m_numThread = NUM_THREAD; }
+
+    m_recoveryBatchSize = readInt("recovery.batchSize");
+    if (m_recoveryBatchSize <= 0) { m_recoveryBatchSize = 100; }
+
+    m_keyCacheSize = readInt("keyvalue.keyCacheSize");
+    m_cacheAllKeys = readBool("keyvalue.cacheAllKeys");
+}
+
+bool ConfigMod::readBool (const char* key) {
+    return m_pt.get<bool>(key);
 }
 
 int ConfigMod::readInt (const char* key) {
@@ -131,4 +142,19 @@ int ConfigMod::getLogTh() const {
 int ConfigMod::getNumThread() const {
     assert(!m_pt.empty());
     return m_numThread;
+}
+
+int ConfigMod::getRecoveryBatchSize() const {
+    assert(!m_pt.empty());
+    return m_recoveryBatchSize;
+}
+
+bool ConfigMod::isCacheAllKeys() const {
+    assert(!m_pt.empty());
+    return m_cacheAllKeys;
+}
+
+size_t ConfigMod::getKeyCacheSize() const {
+    assert(!m_pt.empty());
+    return m_keyCacheSize;
 }

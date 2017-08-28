@@ -5,6 +5,7 @@
 #include "common/enum.hh"
 #include "common/debug.hh"
 #include "common/configmod.hh"
+#include "cachemod.hh"
 #include "raidmod.hh"
 #include "coding/coding.hh"
 #include "coding/raid0coding.hh"
@@ -172,11 +173,11 @@ void RaidMod::writePartialSegment(SegmentMetaData* segmentMetaData, char* buf,
 	wcnt = 0;
 
     for (off_len_t offLen : offLens) {
-        curOff = offLen.first;
+        curOff = offLen.first % chunkSize;
         debug ("off_len_t %d len %d\n", offLen.first, offLen.second);
         chunkId = curOff / chunkSize;
         // len of update within a block : min(update len, offset to the end of chunk)
-        len = min (offLen.second+offLen.first-curOff, blockSize - (curOff%blockSize));
+        len = min (offLen.second + offLen.first - chunkId * chunkSize, chunkSize - (curOff % chunkSize));
         assert(len > 0);
         debug ("Going to update Chunk %d [%d]->[%d]\n", chunkId, curOff, curOff+len);
         // may update several chunks, align buffer ref. to changes within chunks
@@ -187,7 +188,7 @@ void RaidMod::writePartialSegment(SegmentMetaData* segmentMetaData, char* buf,
         m_wtp.schedule(boost::bind(&DiskMod::writePartialBlock_mt, m_diskMod, 
                 segmentMetaData->locations[chunkId].first, 
                 segmentMetaData->locations[chunkId].second, curOff,
-                len, buf+curOff, boost::ref(wcnt), ts));
+                len, buf + offLen.first, boost::ref(wcnt), ts));
         if (parityUpdate) {
             // TODO : calculate parity offsets, update parity using XOR
         }
@@ -730,7 +731,7 @@ void RaidMod::readSegment(SegmentMetaData* segmentMetaData, char* buf,
                 m_rtp.schedule(boost::bind(&RaidMod::readChunkSymbols, this, 
                         location.first, location.second, chunk.buf, 
                         chunkSymbols.offLens, boost::ref(rcnt), ts));
-                debug("read chunk %d on disk %d at %d [%c]\n", chunk.chunkId, location.first, 
+                debug ("read chunk %d on disk %d at %d [%c]\n", chunk.chunkId, location.first, 
                         location.second, chunk.buf[0]);
             } else {
                 memset(chunk.buf, 0, chunk.length);
@@ -797,7 +798,6 @@ void RaidMod::readSegment(SegmentMetaData* segmentMetaData, char* buf,
                 free(chunks[chunkPos].buf);
             }
         }
-        
     } 
 
     //map<int, map<int, pair<Chunk,int>>> dataSegUpdatedChunks; // data segId, chunks from log disks, lba
@@ -1251,6 +1251,10 @@ int RaidMod::commitUpdate(map<sid_t, map<chunk_id_t, pair<Chunk,lba_t> > > dataS
                             }
                         }
                     } else if (!rmw) {
+                        for (pair<lba_t, sid_t> loc : dsmd->logLocations[id]) {
+                            lba_t lba = loc.first;
+                            m_diskMod->setLBAFree(dsmd->locations[id].first, lba);
+                        }
                         dsmd->logLocations.erase(id);
                         dsmd->curLogId[id] = INVALID_LOG_SEG_ID;
                     }
@@ -1279,7 +1283,8 @@ int RaidMod::commitUpdate(map<sid_t, map<chunk_id_t, pair<Chunk,lba_t> > > dataS
             //m_segMetaMod->updateHeap(lsmd->segmentId, 0-chunkSize);
             
         }
-
+        m_segMetaMod->m_metaMap.erase(sid);
+        delete lsmd;
     }
 
     free(segbuf);
@@ -1500,8 +1505,8 @@ bool RaidMod::syncAllSegments(LL ts) {
             while (rcnt > 0);
             rcnt = 0;
 
-            printf("commit alive %lu log segments for %lu data segments\n", logAliveSegments.size(), dataSegUpdatedAliveChunks.size());
-            printf("logDiskMap %d\n", logDiskMapSize);
+            debug ("commit alive %lu log segments for %lu data segments\n", logAliveSegments.size(), dataSegUpdatedAliveChunks.size());
+            debug ("logDiskMap %d\n", logDiskMapSize);
             commitUpdate(dataSegUpdatedAliveChunks, logAliveSegments, true, ts);
 
             // prepare for next zone
@@ -1548,6 +1553,7 @@ bool RaidMod::syncAllSegments(LL ts) {
     }
 
     logDiskMap.clear();
+    m_segMetaMod->resetLogSegmentId();
     m_diskMod->resetDisksWriteFront();
     m_diskMod->fsyncDisks();
 
@@ -1671,6 +1677,379 @@ bool RaidMod::syncAllSegments(LL ts) {
     return true;
 }
 #endif
+
+uint64_t RaidMod::recoverData(vector<disk_id_t> failed, vector<disk_id_t> target, LL ts) {
+    int k = m_raidSetting[DATA].codeSetting.k;
+    int n = m_raidSetting[DATA].codeSetting.n;
+    int lK = m_raidSetting[LOG].codeSetting.k;
+    int chunkSize = ConfigMod::getInstance().getSegmentSize() / k;
+
+	if (failed.size() > (unsigned) n-k) {
+		return false;
+	}
+
+	// for decoding
+	set<disk_id_t> failedDisks(failed.begin(), failed.end());
+	vector<chunk_id_t> failedChunks;
+	vector<bool> chunkStatus;
+	vector<ChunkSymbols> reqSymbols;
+	off_len_t offLen;
+	lba_t lba;
+	disk_id_t diskId;
+	// temp holder of alive data
+	vector<Chunk> chunks;
+	Chunk chunk;
+#ifdef BATCH_RECOVERY
+    // batch holder
+    uint32_t batch_size = ConfigMod::getInstance().getRecoveryBatchSize();
+    char *readbuf = (char*) buf_calloc (chunkSize * n * batch_size, sizeof(char));
+    char *writebuf = (char*) buf_calloc (chunkSize * (n-k) * batch_size, sizeof(char));
+    map<disk_id_t,set<lba_t> > readbufMap;
+    vector<SegmentMetaData*> dataSegments;
+    vector< pair<uint32_t, uint32_t> > segmentChunkEnd; // pos in chunks, pos in failedChunks
+#endif
+    char *segbuf = (char*) buf_calloc (chunkSize * n * 2, sizeof(char));
+    // stats
+    uint64_t recovered = 0;
+
+	// init
+	chunk.length = chunkSize;
+	chunkStatus.resize(n);
+#ifdef BATCH_RECOVERY
+    dataSegments.reserve(batch_size);
+    segmentChunkEnd.resize(batch_size);
+    chunks.reserve(n * batch_size);
+#else 
+	chunks.reserve(n);
+#endif
+
+    assert(failed.size() == target.size());
+
+	// scan all data segments
+	m_segMetaMod->m_metaOptMutex.lock();
+    // (3) recover in reverse order of updates
+    unordered_set<sid_t> updatedSegments, updatedSegmentsMirror;
+    vector<sid_t> updatedSegmentsV;
+    map<lba_t, sid_t>& logDiskMap = m_syncMod->m_logDiskMap;
+    bool scanLogChunks = false;
+    lba_t runningLBA = logDiskMap.empty()? 1 : logDiskMap.rbegin()->first + 1;
+    for (; runningLBA > 0 && scanLogChunks; runningLBA--) {
+        if (logDiskMap.count(runningLBA - 1) < 1)
+            continue;
+
+        sid_t lsid = logDiskMap[runningLBA - 1];
+        SegmentMetaData *lsmd = m_segMetaMod->m_metaMap.at(lsid);
+        assert(lsmd->isUpdateLog);
+        // mark the number of associated data segments
+        for (chunk_id_t lcid = 0; lcid < lK; lcid++) {
+            if (lsmd->locations[lcid].first == INVALID_DISK)
+                continue;
+            assert(lsmd->logLocations.count(lcid));
+            sid_t dsid = lsmd->logLocations[lcid].front().first;
+            pair<unordered_set<sid_t>::iterator, bool> ret = updatedSegments.insert(dsid);
+            if (ret.second) updatedSegmentsV.push_back(dsid);
+        }
+        if (updatedSegmentsV.size() > batch_size * 8)
+            break;
+    }
+    updatedSegmentsMirror.insert(updatedSegments.begin(), updatedSegments.end());
+    uint32_t normalCount = 0;
+
+    // (1) in the hashed order
+	//for (pair<sid_t, SegmentMetaData*> segment : m_segMetaMod->m_metaMap) {
+    // (2) lastest log chunk first, followed by stripes in ascending order of id
+    sid_t lastSid = m_segMetaMod->probeNextSegmentId();
+    for (sid_t sid = 0, did = 0; sid < lastSid; sid++) {
+        if (!updatedSegments.empty()) {
+            did = updatedSegmentsV[updatedSegmentsV.size()-updatedSegments.size()];
+            updatedSegments.erase(did);
+            sid--;
+        } else {
+            did = sid;
+            // skip recovered segments
+            if (updatedSegmentsMirror.count(sid)) {
+                continue;
+            }
+        }
+        pair<sid_t, SegmentMetaData*> segment (did, m_segMetaMod->m_metaMap.at(did));
+		// ignore log stripes (assume parity commit is always done before recovery)
+		if (segment.second->isUpdateLog) {
+			continue;
+		}
+		SegmentMetaData* dataSegment = segment.second;
+		// ignore incompleted segments (buffered in memory)
+		if (dataSegment->locations.size() < (unsigned) n) {
+			continue;
+		}
+        normalCount++;
+		// find out which chunk is lost
+        uint32_t failedCount = 0;
+		for (chunk_id_t i = 0; i < n; i++) {
+			chunkStatus[i] = true;
+			if (failedDisks.count(dataSegment->locations[i].first)) {
+				if (failedCount == 0) {
+					offLen.first = chunkSize * i;
+					offLen.second = chunkSize;
+				} else {
+					offLen.second = chunkSize * (i - failedChunks[failedChunks.size()-failedCount] + 1);
+				}
+				failedChunks.push_back(i);
+				chunkStatus[i] = false;
+                failedCount++;
+			}
+		}
+		// no lost chunks
+		if (failedCount < 1) {
+			continue;
+		}
+
+		// find the symbols to read
+		reqSymbols = m_coding[DATA]->getReqSymbols(chunkStatus, m_raidSetting[DATA].codeSetting, offLen);
+		
+#ifdef BATCH_RECOVERY
+        // push required chunk into list
+        for (unsigned int i = 0; i < reqSymbols.size(); i++) {
+			// push the chunk metadata to list
+			chunk.chunkId = reqSymbols[i].chunkId;
+			chunk.buf = 0;
+			chunks.push_back(chunk);
+            // push the lbas to read into list
+			std::tie(diskId, lba) = dataSegment->locations[chunk.chunkId];
+            if (diskId != INVALID_DISK) {
+                assert(lba != INVALID_LBA);
+                readbufMap[diskId].insert(lba);
+                if (CacheMod::getInstance().isInit()) {
+                    CacheMod::getInstance().insertReadBlock(diskId, lba);
+                }
+            }
+        }
+        // mark chunk ends
+        segmentChunkEnd[dataSegments.size()].first = chunks.size();
+        segmentChunkEnd[dataSegments.size()].second = failedChunks.size();
+        dataSegments.push_back(dataSegment);
+        assert(dataSegments.size() <= batch_size);
+        if (dataSegments.size() == batch_size) {
+            recovered += batchRecovery(readbuf, writebuf, segbuf, readbufMap, dataSegments, chunks, failedChunks, segmentChunkEnd, batch_size, target);
+            dataSegments.clear();
+            readbufMap.clear();
+            chunks.clear();
+            failedChunks.clear();
+        }
+#else /* else (not) BATCH_RECOVERY */
+		// read the alive chunks in parallel
+		std::atomic_int rcnt;
+		rcnt = 0;
+		for (unsigned int i = 0; i < reqSymbols.size(); i++) {
+			// push the chunk metadata to list
+			chunk.chunkId = reqSymbols[i].chunkId;
+			chunk.buf = segbuf + chunk.chunkId * chunkSize;
+			chunks.push_back(chunk);
+			// read the chunk (symbols)
+			diskId = dataSegment->locations[chunk.chunkId].first; // disk id
+            if (diskId == INVALID_DISK) {
+                memset(segbuf + chunk.chunkId * chunkSize, 0, chunkSize);
+            } else {
+                lba = dataSegment->locations[chunk.chunkId].second; // disk lba 
+                assert(lba != INVALID_LBA);
+                //m_diskMod->readBlocks(diskId, lba, lba, segbuf + chunk.chunkId * chunkSize, ts);
+                m_rtp.schedule(boost::bind(&DiskMod::readBlocks_mt, 
+                        m_diskMod, diskId, lba /* start */, lba /* end */,
+                        segbuf + chunk.chunkId * chunkSize,
+                        boost::ref(rcnt), ts));
+                rcnt++;
+            }
+		}
+		while(rcnt > 0);
+
+		// decode for lost data
+		m_coding[DATA]->decode(reqSymbols, chunks, segbuf + n * chunkSize, m_raidSetting[DATA].codeSetting, offLen);
+
+		// write the recoved chunk
+		std::atomic_int wcnt;
+		wcnt = 0;
+		for (unsigned int i = 0; i < failedChunks.size(); i++) {
+            assert(i < target.size());
+			chunk_id_t chunkId = failedChunks[i];
+			// mark the chunk is now on the new disk
+			dataSegment->locations[chunkId].first = target[i];
+			// write the chunk to disk
+            //dataSegment->locations[chunkId].second = m_diskMod->writeBlock(target[i], segbuf + chunkId * chunkSize, ts); 
+			m_wtp.schedule(boost::bind(&DiskMod::writeBlock_mt, m_diskMod, 
+					target[i], segbuf + (n + chunkId - offLen.first / chunkSize) * chunkSize, 
+					boost::ref(dataSegment->locations[chunkId].second), 
+					boost::ref(wcnt), ts));
+			wcnt++;
+            recovered += chunkSize;
+		}
+		while(wcnt > 0);
+        chunks.clear();
+        failedChunks.clear();
+#endif
+        reqSymbols.clear();
+	}
+#ifdef BATCH_RECOVERY
+    if (!chunks.empty() && !failedChunks.empty()) {
+        recovered += batchRecovery(readbuf, writebuf, segbuf, readbufMap, dataSegments, chunks, failedChunks, segmentChunkEnd, batch_size, target);
+    }
+#endif
+	m_segMetaMod->m_metaOptMutex.unlock();
+	// free the resources
+#ifdef BATCH_RECOVERY
+    free(writebuf);
+    free(readbuf);
+#endif
+	free(segbuf);
+	return recovered;
+}
+
+uint64_t RaidMod::batchRecovery(
+        char *readbuf, char *writebuf, char* segbuf, map<disk_id_t, set<lba_t> > &readbufMap,
+        vector<SegmentMetaData*> &dataSegments, vector<Chunk> &chunksRead,
+        vector<chunk_id_t> &failedChunks, vector<pair<uint32_t,uint32_t> > segmentChunkEnd,
+        uint32_t batchSize, vector<disk_id_t> target) {
+
+    int k = m_raidSetting[DATA].codeSetting.k;
+    int n = m_raidSetting[DATA].codeSetting.n;
+    int chunkSize = ConfigMod::getInstance().getSegmentSize() / k;
+
+	vector<ChunkSymbols> reqSymbols;
+    ChunkSymbols defaultSymbol;
+    vector<Chunk> chunks;
+    reqSymbols.reserve(n);
+    defaultSymbol.offLens.push_back(pair<uint32_t, uint32_t>(0, chunkSize));
+    chunks.reserve(n);
+
+    unordered_map<disk_id_t,uint32_t> diskRank;
+    unordered_map<disk_id_t,unordered_map<lba_t, uint32_t> > lbaRank;
+    uint32_t pos;
+
+    // read chunks in parallel
+    std::atomic_int rcnt;
+    rcnt = 0;
+    for (auto diskToRead : readbufMap) {
+        // mark the disk position for offset calculation
+        pos = std::distance(readbufMap.begin(), readbufMap.find(diskToRead.first));
+        diskRank[diskToRead.first] = pos;
+        // prefetch
+        //lba_t start = *(diskToRead.second.begin());
+        //lba_t end = *(diskToRead.second.end());
+        //m_diskMod->prefetchRead(diskToRead.first, start, end - start); 
+        // read the chunks
+        m_rtp.schedule(boost::bind(&DiskMod::readBlocks_mt, 
+                m_diskMod, diskToRead.first, diskToRead.second,
+                readbuf + pos * batchSize * chunkSize,
+                boost::ref(rcnt), 0));
+        rcnt++;
+    }
+    while(rcnt > 0);
+
+    for (auto diskToRead : readbufMap) {
+        uint32_t count = 0;
+        for (auto lba = diskToRead.second.begin(); lba != diskToRead.second.end(); lba++ ) {
+            pair<lba_t, uint32_t> record (*lba, count);
+            lbaRank[diskToRead.first].insert(record);
+            count++;
+        }
+        // release cache
+        //lba_t start = *(diskToRead.second.begin());
+        //lba_t end = *(diskToRead.second.end());
+        //m_diskMod->freeReadCache(diskToRead.first, start, end - start); 
+    }
+
+    // decode all failed chunks in segments
+    uint32_t chunkStart = 0;
+    uint32_t failedChunkStart = 0;
+    uint32_t chunkEnd, failedChunkEnd, chunkId;
+    lba_t lba;
+    disk_id_t diskId;
+    off_len_t offLen;
+
+    // disk write count
+    vector<uint32_t> writeCounts;
+    vector<lba_t> firstLBAs;
+    for (uint32_t i = 0; i < target.size(); i++) {
+        writeCounts.push_back(0);
+        firstLBAs.push_back(INVALID_LBA);
+    }
+
+    for (uint32_t i = 0; i < dataSegments.size(); i++) {
+        std::tie(chunkEnd, failedChunkEnd) = segmentChunkEnd[i];
+        for (uint32_t chunkIdx = chunkStart; chunkIdx < chunkEnd; chunkIdx++) {
+            chunkId = chunksRead[chunkIdx].chunkId;
+            std::tie(diskId, lba) = dataSegments[i]->locations[chunkId];
+            if (diskId == INVALID_DISK) {
+                memset(segbuf + chunkId * chunkSize, 0, chunkSize);
+                chunksRead[chunkIdx].buf = segbuf + chunkId * chunkSize;
+                chunks.push_back(chunksRead[chunkIdx]);
+            } else {
+                // locate the chunk in readbuf
+                assert(readbufMap.count(diskId) > 0);
+
+                auto lbaIt = readbufMap[diskId].find(lba);
+                assert(lbaIt != readbufMap[diskId].end());
+
+                pos = lbaRank[diskId].at(*lbaIt);
+                chunksRead[chunkIdx].buf = readbuf + (diskRank[diskId] * batchSize + pos) * chunkSize;
+                chunks.push_back(chunksRead[chunkIdx]);
+            }
+            defaultSymbol.chunkId = chunkId;
+            reqSymbols.push_back(defaultSymbol);
+        }
+        for (uint32_t j = failedChunkStart; j < failedChunkEnd; j++) {
+            if (j == failedChunkStart) {
+                offLen.first = failedChunks[j] * chunkSize;
+                offLen.second = chunkSize;
+            } else {
+                offLen.second = (failedChunks[j] - offLen.first + 1) * chunkSize;
+            }
+        }
+        // decode 
+		m_coding[DATA]->decode(reqSymbols, chunks, segbuf + n * chunkSize, m_raidSetting[DATA].codeSetting, offLen);
+        // copy chunks to write buffer
+        for (uint32_t j = failedChunkStart; j < failedChunkEnd; j++) {
+            uint32_t index = j - failedChunkStart;
+            memcpy(writebuf + (index * batchSize + writeCounts[index]++) * chunkSize,
+                    segbuf + (n + failedChunks[j] - offLen.first / chunkSize) * chunkSize,
+                    chunkSize );
+        }
+        
+        chunkStart = chunkEnd;
+        failedChunkStart = failedChunkEnd;
+        chunks.clear();
+        reqSymbols.clear();
+    }
+    std::atomic_int wcnt;
+    wcnt = 0;
+    uint64_t recovered = 0;
+    // write chunk in parallel
+    for (uint32_t i = 0; i < target.size(); i++) {
+        m_wtp.schedule(boost::bind(&DiskMod::writeSeqBlocks_mt, m_diskMod, 
+                target[i], writebuf + (i * batchSize * chunkSize), 
+                writeCounts[i], boost::ref(firstLBAs[i]), 
+                boost::ref(wcnt), 0));
+        wcnt++;
+        recovered += writeCounts[i] * chunkSize;
+    }
+    while(wcnt > 0);
+    // update metadata
+    chunkStart = 0;
+    failedChunkStart = 0;
+    for (uint32_t i = 0; i < target.size(); i++) {
+        writeCounts[i] = 0;
+    }
+    for (uint32_t i = 0; i < dataSegments.size(); i++) {
+        std::tie(chunkEnd, failedChunkEnd) = segmentChunkEnd[i];
+        for (uint32_t j = failedChunkStart; j < failedChunkEnd; j++) {
+            uint32_t index = j - failedChunkStart;
+            dataSegments[i]->locations[failedChunks[j]].first = target[index];
+            dataSegments[i]->locations[failedChunks[j]].second = firstLBAs[index] + writeCounts[index];
+            writeCounts[index]++;
+        }
+        chunkStart = chunkEnd;
+        failedChunkStart = failedChunkEnd;
+    }
+    return recovered;
+}
 
 // return whether sync is successful
 bool RaidMod::syncSegment(sid_t segmentId, LL ts) {
@@ -1950,15 +2329,15 @@ void RaidMod::readChunkSymbols(disk_id_t diskId, lba_t lba, char* buf,
     int len = 0;
     int blockSize = ConfigMod::getInstance().getBlockSize();
     for (off_len_t offLen : offLens) {
-        int end = offLen.first + offLen.second - 1;
+        int end = offLen.first + offLen.second;
         chunk_id_t startBlock = offLen.first / blockSize;
-        chunk_id_t endBlock = end / blockSize;
+        chunk_id_t endBlock = (end - 1) / blockSize;
         int numPages = 0;
         for (int i = startBlock; i <= endBlock; i++) {
             int inBlockOff = max(offLen.first - i * blockSize, 0);
-            int inBlockLen = min(end - i * blockSize, blockSize - inBlockOff);
+            int inBlockLen = min(end, blockSize) - inBlockOff;
             off_len_t inBlockOffLen (inBlockOff, inBlockLen);
-            numPages += m_diskMod->readBlock(diskId, lba, buf + len + inBlockOff + i * blockSize, inBlockOffLen, ts);
+            numPages += m_diskMod->readBlock(diskId, lba, buf + len + i * blockSize, inBlockOffLen, ts);
         }
         debug ("Read %d pages\n", numPages);
         len += offLen.second;

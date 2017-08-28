@@ -318,6 +318,9 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
                         dsmd = lit->segmentMetaData;
                     }
 
+#ifdef STRIPE_PLOG
+                    diskId = logbuf.curOff / chunkSize;
+#endif
                     // read chunk (i) from buffer [overwritten??], or (ii) from disk, if it's partial update
                     if (isPartialUpdate) {
                         int dsid = dsmd->segmentId;
@@ -331,9 +334,6 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
                     }
 
                     LL segOfs = lit->segmentOffset + (curOff - lit->fileOffset);
-#ifdef STRIPE_PLOG
-                    diskId = logbuf.curOff / chunkSize;
-#endif
                     int logbufOff = diskId * chunkSize + (segOfs % chunkSize);
 
                     debug("[before] %d map: %x , lookupVector: %lu; level: %d to add: %d\n", 
@@ -815,9 +815,12 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
                     // if chunk pos is empty and not to the same disk, can write parallel
                     assert((logbuf.chunkBitmap & (0x1 << diskId)) == 0);
 #endif
+#ifdef STRIPE_PLOG
+                    diskId = logbuf.curOff / chunkSize;
+#endif
                     // read before partial update
                     if (isPartialUpdate) {
-                        if (m_segmentIdMap.count(dsid) || m_updateSegmentIdMap.count(dsid)) {
+                        if ((m_segmentIdMap.count(dsid) || m_updateSegmentIdMap.count(dsid)) && m_logLevel > 0) {
                             unordered_map<chunk_id_t, pair<int, chunk_id_t> > levels;
                             getAliveUpdateSegmentIds(dsid, levels);
                             readLog(logbuf.buf + diskId * chunkSize, dsid, 
@@ -829,9 +832,6 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
                     }
 
                     // write starts
-#ifdef STRIPE_PLOG
-                    diskId = logbuf.curOff / chunkSize;
-#endif
                     int logbufOff = diskId * chunkSize + startChunkOff;
                     assert(logbufOff + len <= m_logSegmentSize);
                     memcpy(logbuf.buf + logbufOff, buf + bufCurOff, len);
@@ -916,7 +916,7 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
             // get buf reference and lock
             logbuf.logMutex->lock();
 
-            sid_t dsid  = fileOffLen.first / m_segmentSize;
+            sid_t dsid = fileOffLen.first / m_segmentSize;
             if (logbuf.segmentMetaData == nullptr) {
                 bool exists = m_segmetaMod->m_metaMap.count(dsid);
                 if (exists) {
@@ -931,7 +931,7 @@ bool LogMod::writeLog (char* buf, int level, FileMetaData* fmd,
             soff_len_t firOffLen, secOffLen;
             if (m_logLevel > 0)  {
                 // append new data to log buffer
-                memcpy(logbuf.buf + logbuf.curOff, buf, len);
+                memcpy(logbuf.buf + logbuf.curOff, buf + bufCurOff, len);
                 if (logbuf.segmentMetaData->segmentId != dsid) printf("%d ; %d off %llu dsid %d\n", logbuf.segmentMetaData->segmentId, dsid, fileOffLen.first, dsid);
                 assert(logbuf.segmentMetaData->segmentId == dsid);
 
@@ -1231,7 +1231,7 @@ int LogMod::getAliveUpdateSegmentIds(sid_t sid, unordered_map<chunk_id_t, pair<i
     levels.clear();
     m_updatedSegmentIdMapMutex.lock_shared();
     if (m_updatedSegmentIdMap.count(sid) > 0) {
-        sid_levels = m_updatedSegmentIdMap[sid];
+        sid_levels = m_updatedSegmentIdMap.at(sid);
         // chunkId, <buf lv, diskId>
         for (pair<int, chunk_id_t> lv : sid_levels) {
             chunk_id_t cid = m_updateLogbuffers[lv.first].chunkMap[lv.second].first;
@@ -1744,7 +1744,7 @@ bool LogMod::flushUpdateInChunkGroups(int level, FileMetaData* curfmd, LL ts, bo
 					dsmd, obuf + chunkId * chunkSize, 
                     make_pair(chunkId * chunkSize, chunkSize), ts, false,
 					boost::ref(rcnt)));
-            memcpy(nbuf + (curbuf * n + chunkId) * chunkSize, 
+            memcpy(nbuf + (curbuf * k + chunkId) * chunkSize, 
                     logbuf.buf + logChunkId * chunkSize, chunkSize);
 
             // clear up
@@ -1766,7 +1766,7 @@ bool LogMod::flushUpdateInChunkGroups(int level, FileMetaData* curfmd, LL ts, bo
         for (int i = 0; i < k+m; i++) {
             if (i >= k) {
 				lsmd->locations[i] = make_pair(INVALID_DISK,INVALID_CHUNK);
-                memcpy(pbuf + (curbuf + (i-k) * m_updatedSegmentIdMap.size()) * chunkSize, nchunks[i].buf, chunkSize);
+                memcpy(pbuf + (curbuf * m + (i-k)) * chunkSize, nchunks[i].buf, chunkSize);
                 //memcpy(obuf + i * chunkSize, ochunks[i].buf, chunkSize);
             }
             free(nchunks[i].buf);
@@ -1774,6 +1774,8 @@ bool LogMod::flushUpdateInChunkGroups(int level, FileMetaData* curfmd, LL ts, bo
         }
 
         // xor the difference
+        Coding::bitwiseXor(nbuf + curbuf * m_segmentSize, obuf, 
+                nbuf + curbuf * m_segmentSize, m_segmentSize);
         //Coding::bitwiseXor(nbuf + k * chunkSize, obuf + k * chunkSize, 
         //        nbuf + k * chunkSize, chunkSize * m);
 
@@ -1811,6 +1813,7 @@ bool LogMod::flushUpdateInChunkGroups(int level, FileMetaData* curfmd, LL ts, bo
         }
 #endif
         lsmdV.push_back(lsmd);
+        curbuf++;
     }
     m_raidMod->writeBatchedLogParity(lsmdV.size(), lsmdV, pbuf, ts);
     while (wcnt > 0);

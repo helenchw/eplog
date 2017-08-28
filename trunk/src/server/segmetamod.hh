@@ -74,9 +74,22 @@ public:
 
     /** the mapping of segment id and segment metadata data structure */
     nv_unordered_map<sid_t, SegmentMetaData*> m_metaMap;       // simple hack for accessing from other class
+    RWMutex m_metaOptMutex;                     /**< Lock for operations on metaMap and idMap */
+
+    /**
+     * probeNextSegmentId
+     * Probe next segment Id (without allocating it), NOT THREAD-SAFE
+     * \return next segment id
+     */
+    sid_t probeNextSegmentId();
+
+    /**
+     * resetLogSegmentId
+     * Reset the log segment id counter for log segment search (after parity commit)
+     */
+    void resetLogSegmentId();
 
 private:
-    RWMutex m_metaOptMutex;                     /**< Lock for operations on metaMap and idMap */
     sid_t m_segmentIdCounter;                   // no need to be atomic, we have lock already
     sid_t m_logSegmentIdCounter;                // no need to be atomic, we have lock already
     int m_segmentSize;                          /**< Segment size */

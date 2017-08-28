@@ -59,33 +59,33 @@ vector<DiskInfo> v_diskInfo {disk1,disk2,disk3,disk4,disk5,disk6,disk7,disk8};
         - Each coding scheme is represented by the data structure `CodeSetting`
         - Two coding schemes set, one for data segments, one for log segments
         - E.g. Cauchy Reed-Solomon Codes (n,k,w)=(6,4,8) for data segments, and Cauchy Reed-Solomon Codes (n,k,w)=(8,6,8) for log segments
-      ```c
-      CodeSetting codeSetting (6,4,8,CAUCHY_CODING);
-      CodeSetting codeLogSetting (8,6,8,CAUCHY_CODING,true);
-      vector<CodeSetting> codeSettingList;
-      codeSettingList.push_back (codeSetting);
-      codeSettingList.push_back (codeLogSetting);
-      ```
+```c
+CodeSetting codeSetting (6,4,8,CAUCHY_CODING);
+CodeSetting codeLogSetting (8,6,8,CAUCHY_CODING,true);
+vector<CodeSetting> codeSettingList;
+codeSettingList.push_back (codeSetting);
+codeSettingList.push_back (codeLogSetting);
+```
     2. `trunk/bin/config.ini`, line 10-14
         - Number of data chunks in data segments and log segments respectively
         - E.g. 4 and 6 data chunks per data segment and log segment respectively
-      ```ini
-      [coding]
-      ; number of data blocks per data segment
-      numBlockPerSegment = 4
-      ; number of data blocks per log segment
-      numBlockPerLogSegment = 6
-      ```
+```ini
+[coding]
+; number of data blocks per data segment
+numBlockPerSegment = 4
+; number of data blocks per log segment
+numBlockPerLogSegment = 6
+```
     3. `trunk/bin/config.ini`, line 1-5
         - Chunk Size
         - E.g. 4KB per page and 1 page per chunk.
-      ```ini
-      [ssd]
-      ; page size
-      pageSize = 4096 
-      ; chunk size in unit of pages
-      numPagePerBlock = 1
-      ```
+```ini
+[ssd]
+; page size
+pageSize = 4096 
+; chunk size in unit of pages
+numPagePerBlock = 1
+```
 
 ## Documentation
 - Functions of EPLog modules
@@ -104,7 +104,7 @@ vector<DiskInfo> v_diskInfo {disk1,disk2,disk3,disk4,disk5,disk6,disk7,disk8};
     - Generate documentation using doxygen in root-level folder (with `Doxyfile`): `$ doxygen`
 
 ## Contact
-Patrick P.C.Lee ([http://www.cse.cuhk.edu.hk/~pclee](http://www.cse.cuhk.edu.hk/~pclee))
+[Helen H.W. Chan](http://www.cse.cuhk.edu.hk/~hwchan))
 
 ## Publications
 - [Yongkun Li](http://staff.ustc.edu.cn/~ykli), [Helen H. W. Chan](http://www.cse.cuhk.edu.hk/~hwchan), [Patrick P. C. Lee](http://www.cse.cuhk.edu.hk/~pclee), and [Yinlong Xu](http://cs.ustc.edu.cn/szdw/bdjs/201006/t20100614_22073.html). "Elastic Parity Logging for SSD RAID Arrays." *DSN 2016*

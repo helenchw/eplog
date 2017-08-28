@@ -12,6 +12,7 @@ EPLog also leverages some libraries from the open-source community:
 - GF-complete
 - Jerasure
 - Threadpool
+- libcuckoo
 
 ## Test EPLog
 ### Test cases
@@ -88,13 +89,16 @@ vector<DiskInfo> v_diskInfo {disk1,disk2,disk3,disk4,disk5,disk6,disk7,disk8};
 
 ## Documentation
 - Functions of EPLog modules
-    - `SyncMod`: Commiting log on updates back to parities
-    - `SegmentMetaDataMod`: Managing segment metadata
-    - `RaidMod`: Encoding/Decoding segments
-    - `FileMetaDataMod`: Managing file metadata
-    - `LogMod`: Managing stripe buffers (for new writes) and device buffers (for update requests)
-    - `StorageMod`: Exporting interface for read/writes
-        - in `trunk/bin/config.ini` under the section `coding`, the default setting is 4 data chunks per data segments and 6 data chunks per log segments
+    - Internals
+        - `SyncMod`: Controling the generation of parities committed to disk
+        - `SegmentMetaDataMod`: Managing segment metadata
+        - `RaidMod`: Encoding/Decoding segments, performing parity commit and recovery
+        - `FileMetaDataMod`: Managing file metadata
+        - `LogMod`: Managing stripe buffers (for new writes) and device buffers (for update requests)
+        - `CacheMod`: Managing cached chunks read from disks
+    - Interfaces
+        - `StorageMod`: Exporting block interface for read/writes
+        - `KVMod`: Exporting key-value interface for read/writes
 - More details
     - Refer to inline comments in the source file; OR
     - Generate documentation using doxygen in root-level folder (with `Doxyfile`): `$ doxygen`
@@ -106,7 +110,7 @@ Patrick P.C.Lee ([http://www.cse.cuhk.edu.hk/~pclee](http://www.cse.cuhk.edu.hk/
 - [Yongkun Li](http://staff.ustc.edu.cn/~ykli), [Helen H. W. Chan](http://www.cse.cuhk.edu.hk/~hwchan), [Patrick P. C. Lee](http://www.cse.cuhk.edu.hk/~pclee), and [Yinlong Xu](http://cs.ustc.edu.cn/szdw/bdjs/201006/t20100614_22073.html). "Elastic Parity Logging for SSD RAID Arrays." *DSN 2016*
 
 ## Acknowledgments
-EPLog uses open source libraries Jerasure (Rev. 2.0) and GF-Complete developed by [Prof. James S. Plank](http://web.eecs.utk.edu/~plank/).
+EPLog uses open source libraries Jerasure (Rev. 2.0) and GF-Complete developed by [Prof. James S. Plank](http://web.eecs.utk.edu/~plank/). EPLog also uses [libcuckoo](https://github.com/efficient/libcuckoo/) to realize the key-value interface.
 
 The prototype is an extension of the storage system framework built by [Jeremy Chan](https://github.com/jeremychan) and [Qin Ding](https://github.com/zie118).
 

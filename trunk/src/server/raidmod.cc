@@ -175,7 +175,7 @@ void RaidMod::writePartialSegment(SegmentMetaData* segmentMetaData, char* buf,
     for (off_len_t offLen : offLens) {
         curOff = offLen.first % chunkSize;
         debug ("off_len_t %d len %d\n", offLen.first, offLen.second);
-        chunkId = curOff / chunkSize;
+        chunkId = offLen.first / chunkSize;
         // len of update within a block : min(update len, offset to the end of chunk)
         len = min (offLen.second + offLen.first - chunkId * chunkSize, chunkSize - (curOff % chunkSize));
         assert(len > 0);
@@ -1771,6 +1771,8 @@ uint64_t RaidMod::recoverData(vector<disk_id_t> failed, vector<disk_id_t> target
                 continue;
             }
         }
+        if (m_segMetaMod->m_metaMap.count(did) == 0)
+            continue;
         pair<sid_t, SegmentMetaData*> segment (did, m_segMetaMod->m_metaMap.at(did));
 		// ignore log stripes (assume parity commit is always done before recovery)
 		if (segment.second->isUpdateLog) {

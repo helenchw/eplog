@@ -10,6 +10,7 @@
 typedef chrono::high_resolution_clock Clock;
 typedef chrono::milliseconds milliseconds;
 int segmentSize, pageSize, pagePerBlock, blockPerSeg, blockSize;
+int testid = 0;
 
 /*! 
     Print the buffer, of which size is the same as a segment
@@ -99,8 +100,9 @@ int main () {
     bool same = false;
     {
 
-    // TEST1: write -> read
-        printf ("\n%s\n", ">>> Test 1: Write a file");
+        // TEST1: write -> read
+        testid++;
+        printf ("\n>>> Test %d: Write a file\n", testid);
         char *buf = (char*) malloc (sizeof(char)*segmentSize);
         int fd = open("/dev/urandom", O_RDONLY);
         int ret = read(fd, buf, segmentSize);
@@ -133,10 +135,11 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf ("%s\n", ">>> Test 1 (write a new file) passed.");
+        printf (">>> Test %d (write a new file) passed.\n", testid);
 
         // TEST2: modify
-        printf("\n%s\n", ">>> Test 2: Overwrite the file");
+        testid++;
+        printf("\n>>> Test %d: Overwrite the file\n", testid);
         char *obuf = (char*) malloc (sizeof(char)*segmentSize);
         memcpy(obuf, buf, segmentSize);
         ret = read (fd, buf + blockSize, blockSize*2);
@@ -164,15 +167,16 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf("%s\n", ">>> Test 2 (overwrite the file) passed.");
+        printf(">>> Test %d (overwrite the file) passed.\n", testid);
         free(buf);
         free(buf1);
         free(obuf);
     }
     
     {
-    // TEST3: 2M file, modify, read
-        printf ("\n%s\n", ">>> Test 3a: Write another new file");
+        // TEST3: 2M file, modify, read
+        testid++;
+        printf ("\n>>> Test %da: Write another new file\n", testid);
         char *buf = (char*) malloc (sizeof(char)*segmentSize * 2);
         char *buf1 = (char*) malloc (segmentSize * 2);
         memset (buf, 'A', segmentSize);
@@ -185,9 +189,9 @@ int main () {
         int byteWritten = storageMod->write(buf, segmentSize * 2, segmentSize * 2);
 #endif
         printf ("Whole segment, byteWriten = %d\n", byteWritten);
-        printf ("%s\n", ">>> Test 3a (write another new file) passed.");
+        printf (">>> Test %da (write another new file) passed.\n", testid);
 
-        printf ("%s\n", ">>> Test 3b: Overwrite the file");
+        printf (">>> Test %db: Overwrite the file\n", testid);
         int skip = (blockPerSeg < 3)? 0:blockPerSeg/2;
 
         // modify
@@ -241,9 +245,9 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf ("%s\n", ">>> Test 3b (overwrite the file) passed.");
+        printf (">>> Test %db (overwrite the file) passed.\n", testid);
 
-        printf ("%s\n", ">>> Test 3c: Overwrite the file");
+        printf (">>> Test %dc: Overwrite the file\n", testid);
 
         // force buffer flush, modify
         memset (buf + blockSize * (blockPerSeg -1), 'T', blockSize);
@@ -269,9 +273,9 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf ("%s\n", ">>> Test 3c (overwrite the file) passed.");
+        printf (">>> Test %dc (overwrite the file) passed.\n", testid);
 
-        printf ("%s\n", ">>> Test 3c: Overwrite the file");
+        printf (">>> Test %dc: Overwrite the file\n", testid);
         // modify 
         memset (buf + blockSize * (blockPerSeg -1), 'L', blockSize);
 #ifndef BLOCK_ITF
@@ -305,9 +309,9 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf ("%s\n", ">>> Test 3d (overwrite the file) passed.");
+        printf (">>> Test %dd (overwrite the file) passed.\n", testid);
 
-        printf ("%s\n", ">>> Test 3e: Overwrite the file");
+        printf (">>> Test %de: Overwrite the file\n", testid);
         // modify 
         memset (buf + blockSize * (blockPerSeg -1) , 'E', blockSize * 2);
 #ifndef BLOCK_ITF
@@ -332,9 +336,9 @@ int main () {
             printf("----------------------------------------\n");
             assert (same);
         }
-        printf ("%s\n", ">>> Test 3e (overwrite the file) passed.");
+        printf (">>> Test %de (overwrite the file) passed.\n", testid);
 
-        printf ("%s\n", ">>> Test 3f: Partial read");
+        printf (">>> Test %df: Partial read\n", testid);
         // read
         memset(buf1, 0, segmentSize * 2);
         if (blockPerSeg < 2) {
@@ -366,9 +370,9 @@ int main () {
                 assert (same);
             }
         }
-        printf ("%s\n", ">>> Test 3e (partial read) passed.");
+        printf (">>> Test %de (partial read) passed.\n", testid);
         
-        printf ("\n%s\n", ">>> Repeat Test 3a-f");
+        printf ("\n>>> Repeat Test %da-f\n", testid);
         // REPEAT every test
         memset (buf, 'A', segmentSize);
         memset (buf + segmentSize, 'B', segmentSize);
@@ -511,13 +515,13 @@ int main () {
 #ifndef BLOCK_ITF
             byteRead = storageMod->read("testfile1", buf1, blockSize, blockSize*(blockPerSeg-1));
 #else
-            byteRead = storageMod->read(buf1, segmentSize * 2 + blockSize, blockSize*(blockPerSeg-1));
+            byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
             printf("[REPEAT] byteRead = %d\n", byteRead);
-            same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg-1)) == 0);
+            same = (memcmp(buf, buf1, segmentSize * 2) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg-1));
+                printdiff(buf, buf1, segmentSize *2);
                 printf("----------------------------------------\n");
                 assert (same);
             }
@@ -525,40 +529,97 @@ int main () {
 #ifndef BLOCK_ITF
             byteRead = storageMod->read("testfile1", buf1, blockSize, blockSize*(blockPerSeg -2));
 #else
-            byteRead = storageMod->read(buf1, segmentSize * 2 + blockSize, blockSize*(blockPerSeg -2));
+            byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
 #endif
             printf("[REPEAT] byteRead = %d\n", byteRead);
-            same = (memcmp(buf + blockSize, buf1, blockSize*(blockPerSeg -2)) == 0);
+            same = (memcmp(buf, buf1, segmentSize * 2) == 0);
             if ( ! same ) {
                 printf("----------------------------------------\n");
-                printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg -2));
+                printdiff(buf, buf1, segmentSize *2);
                 printf("----------------------------------------\n");
                 assert (same);
             }
         }
-        printf("%s\n", "[REPEAT] Test 3a-f passed.\n");
+        printf("[REPEAT] Test %da-f passed.\n", testid);
+
+        // Test 4 Parity commit
+        testid++;
+        printf(">>>> Test %d: Parity commit\n", testid);
+        logMod->flushToDiskInBatch();
+        storageMod->flushUpdateLog();
+        storageMod->syncAllOnDiskLog();
+        diskMod->fsyncDisks();
+#ifndef BLOCK_ITF
+        byteRead = storageMod->read("testfile1", buf1, 0, segmentSize);
+#else
+        byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
+#endif
+        printf("byteRead = %d\n", byteRead);
+        same = (memcmp(buf, buf1, segmentSize * 2) == 0);
+        if ( ! same ) {
+            printf("----------------------------------------\n");
+            printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg -2));
+            printf("----------------------------------------\n");
+            assert (same);
+        }
+        printf(">>>> Test %d (parity commit) passed\n\n", testid);
+        
+        // Test 5 Recovery
+        testid++;
+        printf(">>>> Test %d: Recovery\n", testid);
+        vector<disk_id_t> disks;
+        disks.push_back(2);
+        disks.push_back(3);
+        for (disk_id_t d : disks) {
+            diskMod->setDiskStatus(d, false);
+            diskMod->setLBAsFree(d, 0, INT_MAX);
+        }
+        uint64_t recovered = raidMod->recoverData(disks, disks);
+        printf("bytes recovered = %lu\n", recovered);
+#ifndef BLOCK_ITF
+        byteRead = storageMod->read("testfile1", buf1, 0, segmentSize);
+#else
+        byteRead = storageMod->read(buf1, segmentSize * 2, segmentSize * 2);
+#endif
+        printf("byteRead = %d\n", byteRead);
+        same = (memcmp(buf, buf1, segmentSize * 2) == 0);
+        if ( ! same ) {
+            printf("----------------------------------------\n");
+            printdiff(buf + blockSize, buf1, blockSize*(blockPerSeg -2));
+            printf("----------------------------------------\n");
+            assert (same);
+        }
+        printf(">>>> Test %d (recovery) passed\n\n", testid);
 
     }
 
 #ifdef BLOCK_ITF
     {
+        delete storageMod;
+        delete logMod;
+        delete fileMetaMod;
+        delete raidMod;
+        delete segMetaMod;
+        delete syncMod;
+
         syncMod = new SyncMod();
         segMetaMod = new SegmentMetaDataMod();
         raidMod = new RaidMod (diskMod, codeSettingList, &gcQueue, segMetaMod, syncMod);
         fileMetaMod = new FileMetaDataMod(segMetaMod);
 
-        // different log buffer but share the same metadata pool
         logMod = new LogMod(raidMod, segMetaMod, fileMetaMod, syncMod, codeLogSetting);
         storageMod = new StorageMod(segMetaMod, fileMetaMod, logMod, raidMod);
 
-        printf(">>>> Test 4: KV-store interface\n");
+        // Test 6 key-value interfacae
+        testid++;
+        printf(">>>> Test %d: KV-store interface\n", testid);
         
         KVMod *kvMod = new KVMod(storageMod);
 
         char keys[1024][24];
         char values[1024][4096];
 
-        printf(">>>> Test 4a: Set new key-value pairs\n");
+        printf(">>>> Test %da: Set new key-value pairs\n", testid);
         int fd = open("/dev/urandom", O_RDONLY);
         int ret = 0;
         for (int i = 0; i < 1024; i++) {
@@ -583,9 +644,9 @@ int main () {
             }
             free(readBuf);
         }
-        printf(">>>> Test 4a (set new key-value pairs) passed\n");
+        printf(">>>> Test %da (set new key-value pairs) passed\n", testid);
         
-        printf(">>>> Test 4b: Update some key-value pairs\n");
+        printf(">>>> Test %db: Update some key-value pairs\n", testid);
         for (int i = 0; i < 1024; i++) {
             if (i % 100 < 30)
                 continue;
@@ -607,9 +668,9 @@ int main () {
             }
             free(readBuf);
         }
-        printf(">>>> Test 4b (update some key-value pairs) passed\n");
+        printf(">>>> Test %db (update some key-value pairs) passed\n", testid);
 
-        printf(">>>> Test 4 (KV-store interface) passed.\n");
+        printf(">>>> Test %d (KV-store interface) passed.\n\n", testid);
 
         close(fd);
 
@@ -618,6 +679,11 @@ int main () {
     }
 #else //ifdef BLOCK_ITF
     delete storageMod;
+    delete logMod;
+    delete fileMetaMod;
+    delete raidMod;
+    delete segMetaMod;
+    delete syncMod;
 #endif //ifdef BLOCK_ITF
     printf ("%s\n", "========== Finish example tests ==========");
 
